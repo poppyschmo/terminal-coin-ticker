@@ -378,8 +378,8 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
     calls because the limit for ``period="M1"`` is 1000, but we'd need 1440.
     """
     if manage_sigs:
-        # If this works like signal.signal, shouldn't have to remove existing
-        old_sigint_cb = remove_async_sig_handlers(["SIGINT"], loop).pop()
+        # Actually unnecessary since existing uses default handler
+        old_sig_info = remove_async_sig_handlers("SIGINT", loop=loop).pop()
 
         def rt_sig_cb(**kwargs):
             if not gathered.cancelled():
@@ -392,7 +392,7 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
                 else:
                     client.echo("gathered: %r" % gathered)
                 finally:
-                    add_sig_hands(["SIGINT"], callback=old_sigint_cb)
+                    add_async_sig_handlers(old_sig_info, loop=loop)
             # XXX Is this obsolete? See related note for last try/except below
             else:
                 client.echo("Already cancelled: %r" % gathered)
@@ -400,7 +400,7 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
         # No need to partialize since ``gathered``, which ``rt_sig_cb``
         # should have closure over once initialized below, will be the same
         # object when the trap is sprung
-        add_sig_hands(["SIGINT"], callback=rt_sig_cb)
+        add_async_sig_handlers(("SIGINT", rt_sig_cb), loop=loop)
     #
     from collections import namedtuple
     c_bg_nt = namedtuple("background_colors",
@@ -580,7 +580,7 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
             out_futs["subs"] = await apply_many(client.unsubscribe_ticker,
                                                 all_subs)
         if manage_sigs:
-            add_sig_hands(["SIGINT"], callback=old_sigint_cb)
+            add_async_sig_handlers(old_sig_info, loop=loop)
     return out_futs
 
 
@@ -652,10 +652,7 @@ def main_entry():
         raise ValueError("Could not determine trading pairs to display")
     #
     loop = asyncio.get_event_loop()
-    global add_sig_hands
-    from functools import partial
-    add_sig_hands = partial(add_async_sig_handlers, loop=loop)
-    add_sig_hands("SIGINT SIGTERM".split())
+    add_async_sig_handlers("SIGINT SIGTERM".split(), loop=loop)
     #
     LOGFILE = os.getenv("LOGFILE", None)
     #

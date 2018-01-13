@@ -310,33 +310,68 @@ class HitBTCWebSocketsClient:
         return pair
 
 
-def remove_async_sig_handlers(sigs, loop):
+def remove_async_sig_handlers(*sigs, loop=None):
+    """
+    Returns a list of tuples, each of the form::
+
+        (signal.Signals, asyncio.events.Handle._callback)
+
+    Note: ^^^^^^^^^^^^^ is the signal (enum object) not its name. Also,
+    can't just return the ``asyncio.events.Handle`` object, because
+    these don't preserve any reference to the original signal number.
+    """
     outlist = []
-    for sig in sigs:
-        sig_obj = getattr(signal, sig)
-        existing = loop._signal_handlers.get(sig_obj)
+    if loop is None:
+        loop = asyncio.get_event_loop()
+    for item in sigs:
+        if isinstance(item, str):
+            sig = getattr(signal, item)
+        elif isinstance(item, int):
+            sig = signal.Signals(sig)
+        else:
+            assert isinstance(item, signal.Signals)
+            sig = item
+        existing = loop._signal_handlers.get(sig)
         if existing:
-            outlist.append(existing)
-        loop.remove_signal_handler(sig_obj)
-        assert sig_obj not in loop._signal_handlers
+            outlist.append((sig, existing._callback))
+        if not loop.remove_signal_handler(sig):
+            assert sig not in loop._signal_handlers
     return outlist
 
 
-def add_async_sig_handlers(sigs, loop, callback=None):
-    """``callbacks`` is a dict of the form {sig: callback, ...}"""
-    _callback = callback
+def add_async_sig_handlers(*sigs, loop=None):
+    """
+    ``sigs`` can be signals, names, numbers, or tuples of the form::
+
+        (signal/name, callback_func)
+
+    """
+    if loop is None:
+        loop = asyncio.get_event_loop()
 
     def handle_sig(signame):
-        # assert "loop" in locals()
         print("Got a signal: %r" % signame, file=sys.stderr)
         loop.stop()
 
-    for sig in sigs:
-        if _callback is None:
-            # Must partialize the ``signames`` param here by freezing current
-            # ``sig`` "for" obvious reasons, but ``loop`` is safe
-            callback = partial(handle_sig, signame=sig)
-        loop.add_signal_handler(getattr(signal, sig), callback)
+    for item in sigs:
+        if isinstance(item, (str, signal.Signals)):
+            sig = item
+            callback = None
+        else:
+            sig, callback = item
+        #
+        if isinstance(sig, str):
+            sig = getattr(signal, sig)
+        elif isinstance(sig, int):
+            # Reverse lookups made easy with enum
+            sig = signal.Signals(sig)
+        else:
+            assert isinstance(sig, signal.Signals)
+        #
+        if not callable(callback):
+            callback = partial(handle_sig, signame=sig.name)
+        loop.add_signal_handler(sig, callback)
+        callback = None
 
 
 def decimate(inobj):
@@ -412,7 +447,10 @@ if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     sigs = "sigint sigterm".upper().split()
     teardown_cbs = {}
-    add_async_sig_handlers(sigs, loop)
+    add_async_sig_handlers(*sigs, loop=loop)
+    # TODO move this to a test
+    add_async_sig_handlers(*remove_async_sig_handlers(*sigs, loop=loop))
+    #
     try:
         ppj(loop.run_until_complete(main()))
     except RuntimeError as e:
