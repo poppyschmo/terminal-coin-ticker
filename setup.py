@@ -5,13 +5,13 @@ from importlib.util import find_spec
 here = os.path.abspath(os.path.dirname(__file__))
 
 with open(os.path.join(here, "README.rst"), encoding="utf-8") as f:
-    long_description = f.read().split("\n\n")[1].replace("\n", " ")
+    long_description = f.read()
 
 setup(
     name="terminal_coin_ticker",
     author="Jane Soko",
     author_email="boynamedjane@misled.ml",
-    version="0.0.1",
+    version="0.0.2",
     url="https://github.com/poppyschmo/terminal-coin-ticker",
     description="A cryptocurrency ticker for modern terminal emulators",
     long_description=long_description,

@@ -6,9 +6,36 @@ Not much to this at the moment. Just a silly attempt at a basic coin ticker for
 modern terminal emulators. Pass ``--help`` for usage. Python 3.6+ and (likely)
 Linux only.
 
-.. image:: https://asciinema.org/a/0eK0ZkV3vwOwQeLnoAaCpxh3i.png
+   +--------------------------+--------------------------+
+   | |24norm|                 | |24fast|                 |
+   +--------------------------+--------------------------+
+   | |cts|                    | |cts| |puf|              |
+   +--------------------------+--------------------------+
+   | |256norm|                | |256fast|                |
+   +--------------------------+--------------------------+
+   | Newer screenshots soon...| |puf|                    |
+   +--------------------------+--------------------------+
+
+.. |cts| replace:: ``COLORTERM=truecolor``
+.. |ctu| replace:: ``COLORTERM=``
+.. |pun| replace:: ``PULSE=normal``
+.. |puf| replace:: ``PULSE=fast``
+.. |24norm| image:: https://asciinema.org/a/0eK0ZkV3vwOwQeLnoAaCpxh3i.png
+   :target: https://asciinema.org/a/0eK0ZkV3vwOwQeLnoAaCpxh3i?size=medium&cols=73
+   :alt: 24-bit normal
    :width: 100 %
-   :target: https://asciinema.org/a/0eK0ZkV3vwOwQeLnoAaCpxh3i
+.. |24fast| image:: https://asciinema.org/a/RjDVhCu4124ZXPFlrIoTCKAGP.png
+   :target: https://asciinema.org/a/RjDVhCu4124ZXPFlrIoTCKAGP?size=medium&cols=79
+   :alt: 24-bit fast
+   :width: 100 %
+.. |256norm| image:: https://asciinema.org/a/Nxvzi1WAwbnqijsQpIcBsTsOC.png
+   :target: https://asciinema.org/a/Nxvzi1WAwbnqijsQpIcBsTsOC?size=medium&cols=73
+   :alt: 256-color normal
+   :width: 100 %
+.. |256fast| image:: https://asciinema.org/a/gJXa6omitnqW7fxAIKay6a8bP.png
+   :target: https://asciinema.org/a/gJXa6omitnqW7fxAIKay6a8bP?size=medium&cols=73
+   :alt: 256-color fast
+   :width: 100 %
 
 
 Installation

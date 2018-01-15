@@ -5,12 +5,13 @@ Usage::
 
     tc-ticker [NUM] [PAIR ...]
 
-    Show NUM leading products, by volume, and/or PAIRs taking one of the
-    following (case-insensitive) forms:
+    Show NUM volume leaders and/or named PAIRs, which should take
+    one of these (case-insensitive) forms:
 
         basequote base_quote base/quote "base quote"
 
-    Env-var-based options are listed atop the main script.
+    Env-var-based options are listed atop the main script but are
+    subject to change.
 
 Warning
 -------
@@ -639,7 +640,9 @@ def main_entry():
     if len(sys.argv) == 1:
         num = min(MAX_HEIGHT, SHOW_FIRST)
     elif sys.argv[1] in ("--help", "-h"):
-        print(__doc__.partition("\nWarn")[0].partition("::\n")[-1])
+        print(*(l.replace("    ", "", 1) for l in
+                __doc__.partition("\nWarn")[0].partition("::\n")[-1]
+                .splitlines(True)), sep="")
         sys.exit()
     elif sys.argv[1].isdigit():
         num = int(sys.argv[1])
