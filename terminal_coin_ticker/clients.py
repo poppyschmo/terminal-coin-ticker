@@ -107,6 +107,21 @@ class HitBTCWebSocketsClient:
             pass
         self.lrepr = reprlib.aRepr.repr
 
+    async def __aenter__(self):
+        if self.aio:
+            self._conn = aiohttp.ClientSession()
+            self.websocket = await self._conn.ws_connect(self.url).__aenter__()
+        else:
+            self._conn = websockets.connect(self.url)
+            self.websocket = await self._conn.__aenter__()
+        # Start reading messages
+        self.active_recv_Task = asyncio.ensure_future(self.recv_handler())
+        return self
+
+    async def __aexit__(self, *args, **kwargs):
+        self.active_recv_Task.cancel()
+        await self._conn.__aexit__(*args, **kwargs)
+
     def echo(self, msg, level=6):
         if (level > self.verbose):
             return
@@ -161,21 +176,6 @@ class HitBTCWebSocketsClient:
         self.ticker.update({symbol: params})
         return params
 
-    async def __aenter__(self):
-        if self.aio:
-            self._conn = aiohttp.ClientSession()
-            self.websocket = await self._conn.ws_connect(self.url).__aenter__()
-        else:
-            self._conn = websockets.connect(self.url)
-            self.websocket = await self._conn.__aenter__()
-        # Start reading messages
-        self.active_recv_Task = asyncio.ensure_future(self.recv_handler())
-        return self
-
-    async def __aexit__(self, *args, **kwargs):
-        """Should probably close receive task as well"""
-        await self._conn.__aexit__(*args, **kwargs)
-
     async def do_send(self, message):
         if self.verbose > 6:
             print("> {}".format(self.lrepr(message)), file=self.log)
@@ -204,12 +204,16 @@ class HitBTCWebSocketsClient:
                     print("< {}".format(self.lrepr(raw_message)),
                           file=self.log)
                 message = json.loads(raw_message)
+                # Existing consumers are just regular subroutines for sorting
+                # messages, and their non-null return vals go unused.  If the
+                # point is to start these in order but wait till they all
+                # return, then could try exceptions instead.
                 for __, consumer in sorted((weight, func) for func, weight
                                            in self.consumers.items()):
                     if await consumer(message) is not None:
-                        break
+                        break  # <- skip lower priority handlers
         except asyncio.CancelledError:
-            # pass
+            # Set value of ``self.active_recv_Task._result``
             return "recv_handler exited"
 
     async def get_currency(self, currency=None):
@@ -324,8 +328,9 @@ def remove_async_sig_handlers(*sigs, loop=None):
     if loop is None:
         loop = asyncio.get_event_loop()
     for item in sigs:
+        # Look up Enums like so: signal.Signals["SIGINT"] == signal.Signals(2)
         if isinstance(item, str):
-            sig = getattr(signal, item)
+            sig = signal.Signals[item]
         elif isinstance(item, int):
             sig = signal.Signals(sig)
         else:
@@ -408,19 +413,12 @@ def ppj(obj, *args, **kwargs):
         pprint.pprint(obj, indent=2, stream=sys.stderr)
 
 
-async def apply_many(func, args: list):
-    tasks = []
-    for arg in args:
-        tasks.append(asyncio.ensure_future(func(arg)))
-    return await asyncio.gather(*tasks)
-
-
 async def main(**kwargs):
     Client = HitBTCWebSocketsClient
     async with Client(VERBOSITY, use_aiohttp=USE_AIOHTTP) as client:
         my_currencies = "ETH BCH BTC".split()
         my_symbols = "ETHBTC BCHBTC".split()
-        ppj(await apply_many(client.get_currency, my_currencies))
+        ppj(await asyncio.gather(*map(client.get_currency, my_currencies)))
         #
         # public = "baadac1dbaadac1dbaadac1dbaadac1d"
         # secret = "feedbeefdeadbabefeedbabedeadbeef"
@@ -428,15 +426,14 @@ async def main(**kwargs):
         # ppj(await client.get_active_orders())
         #
         client.echo("Starting subscription cycle demo")
-        futs = await apply_many(client.subscribe_ticker, my_symbols)
+        futs = await asyncio.gather(*map(client.subscribe_ticker, my_symbols))
         futs.append(await asyncio.sleep(5, result="Did stuff"))  # ← do stuff
-        futs += await apply_many(client.unsubscribe_ticker, my_symbols)
-        client.active_recv_Task.cancel()
-        futs.append(await asyncio.wait_for(client.active_recv_Task,
-                                           timeout=None))
+        futs += await asyncio.gather(*map(client.unsubscribe_ticker,
+                                          my_symbols))
         client.echo("All done...")
         ppj(client.ticker)
-        return dict(futs=futs)
+    futs.append(client.active_recv_Task.result())
+    return dict(futs=futs)
 
 
 if __name__ == "__main__":

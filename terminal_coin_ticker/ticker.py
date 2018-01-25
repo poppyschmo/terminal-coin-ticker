@@ -32,7 +32,7 @@ if __name__ == "__main__":
         os.path.dirname(os.path.abspath(__file__))))
 
 from terminal_coin_ticker.clients import (  # noqa
-    HitBTCWebSocketsClient, apply_many, add_async_sig_handlers, decimate,
+    HitBTCWebSocketsClient, add_async_sig_handlers, decimate,
     remove_async_sig_handlers, ppj
 )
 
@@ -83,6 +83,10 @@ def _rank_by_volume():
     btc_usd = Dec([s["last"] for s in data if s["symbol"] == "BTCUSD"].pop())
 
     def _helper(d):
+        # Sometimes new currencies are added, but the record is incomplete
+        if not d["volumeQuote"]:
+            return d["symbol"], Dec("0")
+        #
         if d["symbol"].endswith("USD") or d["symbol"].endswith("USDT"):
             in_usd = Dec(d["volumeQuote"])
         elif d["symbol"].endswith("ETH"):
@@ -255,10 +259,10 @@ async def _check_timestamps(all_subs, client, kill_handler, strict=True,
         ts = _make_date(ts_str)
         diff = (datetime.utcnow() - ts).seconds
         if diff > stale_secs:
-            m = diff // stale_secs
-            s = diff % stale_secs
-            client.echo("Stale timestamp for %r. "
-                        "Off by %d min %d secs" % (sym, m, s), 5)
+            if LOGFILE:
+                # Using ``*.call_soon`` doesn't seem to make a difference here
+                client.echo("Stale timestamp for %r. Off by %d min %d secs" %
+                            (sym, *divmod(diff, 60)), 5)
             stale_subs.add(sym)
             if strict and len(stale_subs) / len(all_subs) > max_stale:
                 kill_handler(error="The number of pairs awaiting updates has "
@@ -383,20 +387,21 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
         old_sig_info = remove_async_sig_handlers("SIGINT", loop=loop).pop()
 
         def rt_sig_cb(**kwargs):
-            if not gathered.cancelled():
-                kwargs.setdefault("msg", "Cancelling gathered")
-                try:
-                    gathered.set_result(kwargs)
-                except asyncio.futures.InvalidStateError:
-                    # Not sure if the repr displays exception if set
-                    client.echo("Already done: %r" % gathered)
-                else:
-                    client.echo("gathered: %r" % gathered)
-                finally:
-                    add_async_sig_handlers(old_sig_info, loop=loop)
-            # XXX Is this obsolete? See related note for last try/except below
+            kwargs.setdefault("msg", "Received SIGINT, quitting")
+            # Calling ``gathered.cancel()`` here causes member coros to exit
+            # faster and changes their state from "pending" to "finished".
+            # An ``asyncio.CancelledError`` should not be thrown.
+            try:
+                assert gathered.cancel()
+            except asyncio.InvalidStateError:
+                # Repr to be logged here includes exception name
+                client.echo("Already done: %r" % gathered)
             else:
-                client.echo("Already cancelled: %r" % gathered)
+                loop.call_soon(client.echo,
+                               "Cancelled gathered: %r" % gathered)
+                gathered.set_result(kwargs)
+            finally:
+                add_async_sig_handlers(old_sig_info, loop=loop)
 
         # No need to partialize since ``gathered``, which ``rt_sig_cb``
         # should have closure over once initialized below, will be the same
@@ -459,7 +464,7 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
     bC, qC = "baseCurrency", "quoteCurrency"
     #
     if manage_subs:
-        await apply_many(client.subscribe_ticker, all_subs)
+        await asyncio.gather(*map(client.subscribe_ticker, all_subs))
         max_tries = 3
         while max_tries:
             if all(s in clt and s in cls for s in ranked):
@@ -467,8 +472,9 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
             await asyncio.sleep(1)
             max_tries -= 1
         else:
-            out_futs["subs"] = await apply_many(client.unsubscribe_ticker,
-                                                all_subs)
+            out_futs["subs"] = await asyncio.gather(
+                *map(client.unsubscribe_ticker, all_subs)
+            )
             out_futs["error"] = "Problem subscribing to remote service"
             return out_futs
     #
@@ -532,8 +538,9 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
                % (sum(widths) - os.get_terminal_size().columns))
         out_futs["error"] = msg
         if manage_subs:
-            out_futs["subs"] = await apply_many(client.unsubscribe_ticker,
-                                                all_subs)
+            out_futs["subs"] = await asyncio.gather(
+                *map(client.unsubscribe_ticker, all_subs)
+            )
         return out_futs
     # Format string for actual line items
     fmt = "".join(("{_beg}{:%d}" % widths[0],
@@ -570,16 +577,30 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
     #
     try:
         out_futs["gathered"] = await gathered
-    # XXX this means ``gathered`` has been cancelled, but how would this
-    # ever run? None of the signal handlers calls ``cancel()``. Seems a
-    # holdover from early experimenting. Same for the check in ``rt_sig_cb``.
-    except asyncio.CancelledError as e:
-        out_futs["error"] = e
+    except Exception:
+        # Repr of ``Future.exception`` only contains exc name
+        from traceback import print_exc, format_exc
+        if LOGFILE:
+            out_futs["gathered"] = gathered.exception()
+            print_exc(file=LOGFILE)
+        else:
+            out_futs["gathered"] = {"error": format_exc()}
     finally:
         if manage_subs:
             client.echo("Unsubscribing", 6)
-            out_futs["subs"] = await apply_many(client.unsubscribe_ticker,
-                                                all_subs)
+            gunsubs = asyncio.gather(*map(client.unsubscribe_ticker, all_subs))
+            try:
+                out_futs["subs"] = await gunsubs
+            # Catch network/inet errors, etc.
+            except Exception:
+                from traceback import print_exc, format_exc
+                if LOGFILE:
+                    out_futs["subs"] = gunsubs.exception()
+                    print_exc(file=LOGFILE)
+                else:
+                    tb_str = format_exc()
+                    if "ConnectionClosed" not in tb_str:
+                        out_futs["subs"] = {"error": tb_str}
         if manage_sigs:
             add_async_sig_handlers(old_sig_info, loop=loop)
     return out_futs
@@ -590,9 +611,6 @@ async def main(loop, syms):
     async with Client(VERBOSITY, LOGFILE, USE_AIOHTTP) as client:
         #
         rt_fut = do_run_ticker(syms, client, loop)
-        # ``asyncio.CancelledError`` is not raised when interrupting
-        # ``run_ticker`` with ^C. Seems like it's only raised by calling
-        # ``Future.result()`` or "Future.cancel()" or ``Task.cancel()``
         return await rt_fut
 
 
@@ -671,33 +689,28 @@ def main_entry():
     else:
         print(civis, end="", flush=True)
     #
-    if LOGFILE and os.path.exists(LOGFILE):
-        from contextlib import redirect_stderr
-        # Multi-context comma syntax doesn't scope left to right, so must nest:
-        with open(os.getenv("LOGFILE"), "w") as LOGFILE:
-            with redirect_stderr(LOGFILE):
-                try:
+    try:
+        if LOGFILE and os.path.exists(LOGFILE):
+            from contextlib import redirect_stderr
+            with open(os.getenv("LOGFILE"), "w") as LOGFILE:
+                with redirect_stderr(LOGFILE):
                     ppj(loop.run_until_complete(main(loop, syms)),
                         file=LOGFILE)
-                except RuntimeError as e:
-                    if "loop stopped before Future completed" not in str(e):
-                        raise
-                finally:
-                    print(cnorm, "\x1b[K")
-    else:
-        VERBOSITY = 3
-        try:
-            results = loop.run_until_complete(main(loop, syms))
-        except RuntimeError as e:
-            if "loop stopped before Future completed" not in str(e):
-                raise
         else:
-            if "error" in results:
-                print(results["error"], file=sys.stderr)
-            if "error" in results.get("gathered", {}):
-                print(results["gathered"]["error"], file=sys.stderr)
-        finally:
-            print(cnorm, "\x1b[K")
+            VERBOSITY = 3
+            results = loop.run_until_complete(main(loop, syms))
+            for d in (results, results.get("gathered", {}),
+                      results.get("subs", {})):
+                if "error" in d:
+                    print("", d["error"], sep="\n", file=sys.stderr)
+    # XXX not sure why this was ever added
+    except RuntimeError as e:
+        if "loop stopped before Future completed" not in str(e):
+            raise
+        elif LOGFILE:
+            print(e, file=LOGFILE)
+    finally:
+        print(cnorm, "\x1b[K")
 
 
 if __name__ == "__main__":
