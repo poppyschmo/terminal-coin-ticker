@@ -266,13 +266,19 @@ async def _check_timestamps(all_subs, client, kill_handler, strict=True,
             stale_subs.add(sym)
             if strict and len(stale_subs) / len(all_subs) > max_stale:
                 kill_handler(error="The number of pairs awaiting updates has "
-                             "exceeded the maximum allowed")
+                             "exceeded the maximum allowed",
+                             msg="Killed by _check_timestamps")
+                break
             else:
                 client.ticker[sym]["timestamp"] = None  # <- mark as stale
         else:
             stale_subs.discard(sym)
-        await asyncio.sleep(poll_interval)
+        try:
+            await asyncio.sleep(poll_interval)
+        except asyncio.CancelledError:
+            break
     client.echo("Exiting", 6)
+    return "_check_timestamps cancelled"
 
 
 async def _paint_ticker_line(lnum, sym, semaphore, snapshots, ticker, fmt,
@@ -305,7 +311,10 @@ async def _paint_ticker_line(lnum, sym, semaphore, snapshots, ticker, fmt,
         if _pulse_over > pulse_over:
             _pulse_over -= Dec(1)
             _wait = random()
-        await asyncio.sleep(_wait)
+        try:
+            await asyncio.sleep(_wait)
+        except asyncio.CancelledError:
+            break
         _wait = wait
         if pulse:
             latest = last_seen
@@ -328,46 +337,53 @@ async def _paint_ticker_line(lnum, sym, semaphore, snapshots, ticker, fmt,
         if VOL_UNIT:
             volconv = _convert_volume(sym, base, quote, latest, ticker)
         #
-        with await semaphore:
-            print(up, end="")
-            if pulse:
-                if HAS_24:
-                    clrs["_beg"] = (cbg.mix_green if
-                                    pulse == "+" else cbg.mix_red)
-                else:
-                    clrs["_beg"] = bg
-                    clrs["_prc"] = clrs["_chg"] = \
-                        cfg.bright_green if pulse == "+" else cfg.bright_red
-                    clrs["_vol"] = cfg.green if pulse == "+" else cfg.red
-                _wait = 0.124 if PULSE == "fast" else 0.0764
-                pulse = None
-            elif latest["timestamp"] is None:
-                clrs.update(dict(_sym=cfg.dark, _sepl="", _sepr="",
-                                 _prc=(cfg.faint_shade if lnum % 2 else
-                                       cfg.faint_tint), _vol="", _chg=""))
-                change, pulse = 0, None
-            # Must divide by 100 because ``_pulse_over`` is a %
-            elif (abs(abs(latest["last"]) - abs(last_seen["last"])) >
-                  abs(_pulse_over / 100 * last_seen["last"])):
-                pulse = None
-                _wait = 0.0764 if PULSE == "fast" else 0.124
-                if change - last_seen["change"] > 0:
-                    pulse = "+"
-                    clrs["_beg"] = cbg.green
-                    if not HAS_24:
-                        clrs.update(dict(_sym=cfg.green, _sepl="", _sepr="",
-                                         _vol="", _prc="", _chg=""))
-                else:
-                    pulse = "-"
-                    clrs["_beg"] = cbg.red
-                    if not HAS_24:
-                        clrs.update(dict(_sym=cfg.red, _sepl="", _sepr="",
-                                         _vol="", _prc="", _chg=""))
-            print(fmt.format("", "",
-                             base=base.lower(), sep=sep, quote=quote.lower(),
-                             **clrs, **latest, volconv=volconv),
-                  down, sep="", end="", flush=True)
+        if pulse:
+            if HAS_24:
+                clrs["_beg"] = (cbg.mix_green if
+                                pulse == "+" else cbg.mix_red)
+            else:
+                clrs["_beg"] = bg
+                clrs["_prc"] = clrs["_chg"] = (
+                    cfg.bright_green if pulse == "+" else cfg.bright_red
+                )
+                clrs["_vol"] = cfg.green if pulse == "+" else cfg.red
+            _wait = 0.124 if PULSE == "fast" else 0.0764
+            pulse = None
+        elif latest["timestamp"] is None:
+            clrs.update(dict(_sym=cfg.dark, _sepl="", _sepr="",
+                             _prc=(cfg.faint_shade if lnum % 2 else
+                                   cfg.faint_tint), _vol="", _chg=""))
+            change, pulse = 0, None
+        # Must divide by 100 because ``_pulse_over`` is a %
+        elif (abs(abs(latest["last"]) - abs(last_seen["last"])) >
+              abs(_pulse_over / 100 * last_seen["last"])):
+            pulse = None
+            _wait = 0.0764 if PULSE == "fast" else 0.124
+            if change - last_seen["change"] > 0:
+                pulse = "+"
+                clrs["_beg"] = cbg.green
+                if not HAS_24:
+                    clrs.update(dict(_sym=cfg.green, _sepl="", _sepr="",
+                                     _vol="", _prc="", _chg=""))
+            else:
+                pulse = "-"
+                clrs["_beg"] = cbg.red
+                if not HAS_24:
+                    clrs.update(dict(_sym=cfg.red, _sepl="", _sepr="",
+                                     _vol="", _prc="", _chg=""))
+        try:
+            with await semaphore:
+                print(up,
+                      fmt.format("", "", base=base.lower(), sep=sep,
+                                 quote=quote.lower(), **clrs, **latest,
+                                 volconv=volconv),
+                      down,
+                      sep="", end="", flush=True)
+        except asyncio.CancelledError:
+            break
         last_seen.update(latest)
+    #
+    return "Cancelled _paint_ticker_line for: %s" % sym
 
 
 async def do_run_ticker(syms, client, loop, manage_subs=True,
@@ -388,20 +404,19 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
 
         def rt_sig_cb(**kwargs):
             kwargs.setdefault("msg", "Received SIGINT, quitting")
-            # Calling ``gathered.cancel()`` here causes member coros to exit
-            # faster and changes their state from "pending" to "finished".
-            # An ``asyncio.CancelledError`` should not be thrown.
-            try:
-                assert gathered.cancel()
-            except asyncio.InvalidStateError:
-                # Repr to be logged here includes exception name
-                client.echo("Already done: %r" % gathered)
+            out_futs.update(kwargs)
+            if not all(t.cancelled() for t in tasks):
+                client.echo("Cancelling tasks")
+                for task in tasks:
+                    task.cancel()
+            # Not sure if this can ever run. Thinking is if user sends multiple
+            # SIGINTs in rapid succession. Tried naive test w. kill util.
+            # Didn't trigger, but need to verify.
             else:
-                loop.call_soon(client.echo,
-                               "Cancelled gathered: %r" % gathered)
-                gathered.set_result(kwargs)
-            finally:
-                add_async_sig_handlers(old_sig_info, loop=loop)
+                client.echo("Already cancelled: %r" % gathered)
+                loop.call_later(0.1,
+                                client.echo, "Cancelled tasks: %r" % tasks)
+            add_async_sig_handlers(old_sig_info, loop=loop)
 
         # No need to partialize since ``gathered``, which ``rt_sig_cb``
         # should have closure over once initialized below, will be the same
@@ -573,17 +588,18 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
     # Should conversion pairs (all_subs) be included here if not displayed?
     ts_chk = _check_timestamps(all_subs, client, rt_sig_cb, STRICT_TIME)
     #
-    gathered = asyncio.gather(*coros, ts_chk)
+    tasks = [asyncio.ensure_future(c) for c in (*coros, ts_chk)]
+    gathered = asyncio.gather(*tasks)
     #
     try:
         out_futs["gathered"] = await gathered
-    except Exception:
+    except Exception as exc:
         # Repr of ``Future.exception`` only contains exc name
+        out_futs["gathered"] = gathered.exception()
         from traceback import print_exc, format_exc
         if LOGFILE:
-            out_futs["gathered"] = gathered.exception()
             print_exc(file=LOGFILE)
-        else:
+        elif not isinstance(exc, asyncio.CancelledError):
             out_futs["gathered"] = {"error": format_exc()}
     finally:
         if manage_subs:
@@ -699,10 +715,12 @@ def main_entry():
         else:
             VERBOSITY = 3
             results = loop.run_until_complete(main(loop, syms))
-            for d in (results, results.get("gathered", {}),
-                      results.get("subs", {})):
-                if "error" in d:
-                    print("", d["error"], sep="\n", file=sys.stderr)
+            for item in (results, results.get("gathered", {}),
+                         results.get("subs", {})):
+                try:
+                    print("", item["error"], sep="\n", file=sys.stderr)
+                except (TypeError, KeyError):
+                    pass
     # XXX not sure why this was ever added
     except RuntimeError as e:
         if "loop stopped before Future completed" not in str(e):

@@ -56,6 +56,7 @@ TODO
     #. If sort-by-volume is on, re-order while running (might be disorienting,
        so maybe this should be optional)
     #. Convert env-var options to proper ``argparse``/``getopt`` options
+    #. Use proper logging
 
 .. _implement: https://github.com/ccxt/ccxt/pull/751
 .. _plans: https://gist.github.com/kroitor/7dce1d23a10937ab8c07a5451f17ccf2
