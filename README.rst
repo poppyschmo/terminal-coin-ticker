@@ -6,36 +6,39 @@ Not much to this at the moment. Just a silly attempt at a basic coin ticker for
 modern terminal emulators. Pass ``--help`` for usage. Python 3.6+ and (likely)
 Linux only, for now.
 
-Asciicasts
-    +-------------+-------------+------------+-------------+
-    | |24norm|    | |24fast|    | |256norm|  | |256fast|   |
-    +-------------+-------------+------------+-------------+
-    | |cts|       | |cts| |puf| | |msg|      | |puf|       |
-    +-------------+-------------+------------+-------------+
+Running in alacritty_ (Gnome/Fedora 27)
+    |screenshot|
+
+- The plan is to have color schemes adopt exchange branding on `24-bit terms`_
+- Additional asciicasts showing current/future options coming soon:
+
+  - (|one|_) |two|_
+  - (|three|_) |four|_
+
+.. |screenshot| image:: https://user-images.githubusercontent.com
+   /12665556/35469147-1c7457ce-02e4-11e8-88da-1cdd2dd0e9c9.gif
+.. _alacritty: https://github.com/jwilm/alacritty
+.. _24-bit terms: https://gist.github.com/XVilka/8346728
+
+.. |one| replace:: |cts|
+.. |two| replace:: |puf|
+.. |three| replace:: |def|
+.. |four| replace:: |puf|
 
 .. |cts| replace:: ``COLORTERM=truecolor``
 .. |puf| replace:: ``PULSE=fast``
-.. |msg| replace:: *Better examples coming soon...*
+.. |def| replace:: default/256-color
 
-.. |24norm| image:: https://asciinema.org/a/0eK0ZkV3vwOwQeLnoAaCpxh3i.png
-   :target: https://asciinema.org/a/0eK0ZkV3vwOwQeLnoAaCpxh3i?size=medium&cols=73
-   :width: 25 em
-.. |24fast| image:: https://asciinema.org/a/RjDVhCu4124ZXPFlrIoTCKAGP.png
-   :target: https://asciinema.org/a/RjDVhCu4124ZXPFlrIoTCKAGP?size=medium&cols=79
-   :width: 25 em
-.. |256norm| image:: https://asciinema.org/a/Nxvzi1WAwbnqijsQpIcBsTsOC.png
-   :target: https://asciinema.org/a/Nxvzi1WAwbnqijsQpIcBsTsOC?size=medium&cols=73
-   :width: 25 em
-.. |256fast| image:: https://asciinema.org/a/gJXa6omitnqW7fxAIKay6a8bP.png
-   :target: https://asciinema.org/a/gJXa6omitnqW7fxAIKay6a8bP?size=medium&cols=73
-   :width: 25 em
+.. _one: https://asciinema.org/a/0eK0ZkV3vwOwQeLnoAaCpxh3i?size=medium&cols=73
+.. _two: https://asciinema.org/a/RjDVhCu4124ZXPFlrIoTCKAGP?size=medium&cols=79
+.. _three: https://asciinema.org/a/Nxvzi1WAwbnqijsQpIcBsTsOC?size=medium&cols=73
+.. _four: https://asciinema.org/a/gJXa6omitnqW7fxAIKay6a8bP?size=medium&cols=73
 
 
 Installation
-    An executable wrapper, ``tc-ticker``, is available when installed via pip.
-    Otherwise, ``/terminal_coin_ticker/ticker.py`` works as a file arg, so long
-    as the Python interpreter being invoked can summon either websockets_ or
-    aiohttp_.
+    An executable wrapper called ``tc-ticker`` is available when installed via
+    pip.  Otherwise, ``/terminal_coin_ticker/ticker.py`` works as a file arg,
+    so long as Python can summon websockets_ or aiohttp_.
 
 .. _aiohttp: https://aiohttp.readthedocs.io
 .. _websockets: https://websockets.readthedocs.io
@@ -50,23 +53,15 @@ Notes
 
 TODO
     #. Migrate this list to one or multiple issues threads
-    #. Support lower 3.x versions. Seems the only roadblocks are
-       ``async``/``await`` and ``__aiter__``.
+    #. Support 3.4+. Seems the only roadblocks are ``async``/``await`` and
+       ``__aiter__``
     #. Cache session args (pairs) for use easy reuse
     #. If sort-by-volume is on, re-order while running (might be disorienting,
        so maybe this should be optional)
     #. Convert env-var options to proper ``argparse``/``getopt`` options
     #. Use proper logging
-
-.. _implement: https://github.com/ccxt/ccxt/pull/751
-.. _plans: https://gist.github.com/kroitor/7dce1d23a10937ab8c07a5451f17ccf2
-.. _ccxt: https://pypi.org/project/ccxt
-.. _Bitfinex: https://bitfinex.readme.io/v2/reference#ws-public-ticker
-.. _Binance: https://github.com/binance-exchange/binance-official-api-docs
-   /blob/master/web-socket-streams.md
-.. _Poloniex: https://poloniex.com/support/api/
-.. _OKEx: https://www.okex.com/ws_api.html#spapi
-
+    #. Fill the entire width of the terminal window with the relevant background
+       color and distribute the remaining space evenly
 
 Motivation
     Initially a favor for a friend, now more or less a renewed effort to make
