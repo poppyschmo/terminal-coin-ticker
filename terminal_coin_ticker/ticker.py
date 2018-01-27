@@ -165,17 +165,16 @@ def _print_heading(client, colors, widths, numrows, volstr):
     _w = widths[2:] if HEADING in ("normal", "slim") else widths
     head_fmt = "".join("{:%s%d}" % (a, w) for a, w in zip(align_chars, _w))
     #
+    nl = "\x1b[m\n"
     # heading background
     head_bg = bg.dark
     # heading foreground
     head_fg = fg.head_alt if HAS_24 else fg.dim
     # board
     board = (
-        # background
-        bg.dark if HAS_24 else bg.tint,
-        # rows
-        (" " * sum(widths) + "\n") * (numrows - 1),
-        " " * sum(widths), "\x1b[m\x1b[K"
+        *(bg.dark if HAS_24 else bg.tint, " " * sum(widths),
+          "\x1b[m\n") * (numrows - 1),
+        bg.dark if HAS_24 else bg.tint, " " * sum(widths), "\x1b[m\x1b[K"
     )
     if HEADING == "normal":
         print(head_bg, " " * widths[0],  # heading background, left margin
@@ -184,33 +183,34 @@ def _print_heading(client, colors, widths, numrows, volstr):
               "{:<{w}}".format(client.exchange, w=widths[1]), ritm,
               # heading
               head_fg, head_fmt.format("Price", volstr, "Bid", "Ask",
-                                       "Δ (24h)", ""), "\n",
+                                       "Δ (24h)", ""), nl,
               # hr
-              fg.dark, "\x1b[4m", "─" * sum(widths), "\x1b[m", "\n",
+              head_bg, fg.dark, "\x1b[4m", "─" * sum(widths), nl,
               # board
               *board, sep="", end="")
     elif "hr_" in HEADING:
-        ex_hr = (sitm, fg.faint_shade if HAS_24 else fg.dark,
+        ex_hr = (head_bg, sitm, fg.faint_shade if HAS_24 else fg.dark,
                  "─" * widths[0], client.exchange,
-                 "─" * (sum(widths) - len(client.exchange) - widths[0]), "\n")
-        heading = (head_fg, head_fmt.format("", "", "Price", volstr, "Bid",
-                                            "Ask", "Δ (24h)", ""), "\n")
+                 "─" * (sum(widths) - len(client.exchange) - widths[0]), nl)
+        heading = (head_bg, head_fg,
+                   head_fmt.format("", "", "Price", volstr, "Bid", "Ask",
+                                   "Δ (24h)", ""), nl)
         if HEADING == "hr_over":
-            print(head_bg, *ex_hr, *heading, *board, sep="", end="")
+            print(*ex_hr, *heading, *board, sep="", end="")
         else:
-            print(head_bg, *heading, *ex_hr, *board, sep="", end="")
+            print(*heading, *ex_hr, *board, sep="", end="")
     elif HEADING == "full":
-        print(head_bg,  # heading background
-              # exchange
-              sitm, fg.faint_shade if HAS_24 else fg.dark,
+        print(  # exchange
+              head_bg, sitm, fg.faint_shade if HAS_24 else fg.dark,
               "─" * (sum(widths) - len(client.exchange) - widths[-1]),
-              client.exchange, "─" * widths[-1], ritm, "\n",
+              client.exchange, "─" * widths[-1], ritm, nl,
               # heading
-              head_fg, head_fmt.format("", "Pair", "Price", volstr, "Bid",
-                                       "Ask", "Δ (24h)", ""), "\n",
+              head_bg, head_fg,
+              head_fmt.format("", "Pair", "Price", volstr, "Bid", "Ask",
+                              "Δ (24h)", ""), nl,
               # hr
-              fg.faint_shade if HAS_24 else fg.dark,
-              "\x1b[4m", "─" * sum(widths), "\x1b[m", "\n",
+              head_bg, fg.faint_shade if HAS_24 else fg.dark,
+              "\x1b[4m", "─" * sum(widths), nl,
               # board
               *board, sep="", end="")
     elif HEADING == "slim":
@@ -220,7 +220,7 @@ def _print_heading(client, colors, widths, numrows, volstr):
               ritm if HAS_24 else "",
               # heading
               head_fg, head_fmt.format("Price", volstr, "Bid", "Ask",
-                                       "Δ (24h)", ""), "\n",
+                                       "Δ (24h)", ""), nl,
               # board
               *board, sep="", end="")
 
