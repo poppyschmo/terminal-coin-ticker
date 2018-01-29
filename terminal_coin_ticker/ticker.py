@@ -26,15 +26,16 @@ import asyncio
 import os
 import sys
 from decimal import Decimal as Dec
+from enum import Enum
 
 if __name__ == "__main__":
     sys.path.insert(0, os.path.dirname(
         os.path.dirname(os.path.abspath(__file__))))
 
-from terminal_coin_ticker.clients import (  # noqa
-    HitBTCWebSocketsClient, add_async_sig_handlers, decimate,
-    remove_async_sig_handlers, ppj
+from terminal_coin_ticker import (  # noqa E402
+    add_async_sig_handlers, remove_async_sig_handlers, ppj, decimate
 )
+from terminal_coin_ticker.clients import hitbtc, binance  # noqa E402
 
 SHOW_FIRST = 24
 
@@ -48,6 +49,8 @@ STRICT_TIME = True   # Die when service notifications aren't updating
 PULSE = "normal"     # Flash style of "normal," "fast," or null
 PULSE_OVER = 0.125   # Flash threshold as percent change since last update
 HEADING = "normal"   # Also "hr_over," "hr_under," "full," and "slim"
+AUTO_CULL = True     # Drop excess PAIRs and warn instead of exiting
+AUTO_FILL = True     # Absent NUM, add volume leaders up to SHOW_FIRST rows
 
 # TTL vars
 MAX_STALE = 0.5      # Tolerance threshold ratio of stale/all pairs
@@ -55,94 +58,34 @@ STALE_SECS = 15      # Max seconds pair data is considered valid
 POLL_INTERVAL = 10   # Seconds to wait between checks
 
 
-def _rank_by_volume():
-    """
-    Query server via http GET request for the latest ticker data on all
-    traded pairs. Return (pair, volume in USD).
-
-    Note
-    ----
-    Even though this is hardwired to HitBTC, should still probably
-    obtain a list of supported markets and loop through them. Although
-    an actual upstream change in available markets would break plenty of
-    stuff elsewhere.
-    """
-    import json
-    import urllib.request
-    from urllib.error import HTTPError
-    from operator import itemgetter
-    url = "https://api.hitbtc.com/api/2/public/ticker"
-    try:
-        with urllib.request.urlopen(url) as f:
-            data = json.load(f)
-    except HTTPError as e:
-        raise ConnectionError("Problem connecting to server, try again later")
-    if "error" in data:
-        raise ConnectionError(data["error"])
-    eth_usd = Dec([s["last"] for s in data if s["symbol"] == "ETHUSD"].pop())
-    btc_usd = Dec([s["last"] for s in data if s["symbol"] == "BTCUSD"].pop())
-
-    def _helper(d):
-        # Sometimes new currencies are added, but the record is incomplete
-        if not d["volumeQuote"]:
-            return d["symbol"], Dec("0")
-        #
-        if d["symbol"].endswith("USD") or d["symbol"].endswith("USDT"):
-            in_usd = Dec(d["volumeQuote"])
-        elif d["symbol"].endswith("ETH"):
-            in_usd = Dec(d["volumeQuote"]) * eth_usd
-        elif d["symbol"].endswith("BTC"):
-            in_usd = Dec(d["volumeQuote"]) * btc_usd
-        else:
-            raise ValueError("Could not convert %s" % d["symbol"])
-        return d["symbol"], in_usd
-
-    for sym, vol in sorted(map(_helper, data), key=itemgetter(1),
-                           reverse=True):
-        yield sym
+class Headings(Enum):
+    slim = 1
+    normal = hr_over = hr_under = 2
+    full = 3
 
 
-def _get_top_markets(num):
-    """
-    Return a list of ``num`` leading products by trade volume.
-    """
-    sym_gen = _rank_by_volume()
-    return list(next(sym_gen) for n in range(num))
-
-
-def _make_date(timestamp):
-    fmt = "%Y-%m-%dT%H:%M:%S.%fZ"
-    from datetime import datetime
-    return datetime.strptime(timestamp, fmt)
-
-
-def _hex_to_rgb(hstr):
-    """
-    >>> _hex_to_rgb("#fafafa")
-    (250, 250, 250)
-    """
-    return tuple(int(c) for c in bytes.fromhex(hstr.lstrip("#")))
-
-
-def _convert_volume(sym, base, quote, tickdict, ticker):
+def _convert_volume(client, sym, base, quote, tickdict):
     """
     Return volume in target units. Assumptions:
-    1. ``target`` is one of BTC, ETH, USD
+    1. ``target`` exists in ``client.markets``
     2. ``sym`` is canonical (in correct format and confirmed available)
     3. ``tickdict`` has been decimated (digit strings to Decimal instances)
-    4. ``quote`` is never "USDT"
-
-    Update: API recently added ``volumeQuote``, so it's probably better
-    to just combine this with ``_rank_by_volume.<locals>._helper``
     """
+    # XXX this might be better suited as a decorator that returns a
+    # converter already primed with all the exchange particulars.
     target = VOL_UNIT
+    #
+    # At least for HitBTC, Symbol records have a "quoteCurrency" entry
+    # that's always "USD", but some symbols end in "USDT"
     if sym.endswith(target) or (target == "USD" and sym.endswith("USDT")):
-        return tickdict["volumeQuote"]
-    if target == "USD" or quote == "ETH":
-        rate = Dec(ticker[quote + target]["last"])
+        return tickdict["volQ"]
+    #
+    assert client.conversions is not None
+    if quote + target in client.conversions:
+        rate = Dec(client.ticker[quote + target]["last"])
     else:
-        rate = 1 / Dec(ticker[target + quote]["last"])
-    return Dec(ticker[sym]["volumeQuote"]) * rate
+        rate = 1 / Dec(client.ticker[target + quote]["last"])
+    return Dec(client.ticker[sym]["volQ"]) * rate
 
 
 def _print_heading(client, colors, widths, numrows, volstr):
@@ -253,11 +196,10 @@ async def _check_timestamps(all_subs, client, kill_handler, strict=True,
         await asyncio.sleep(poll_interval)
     stale_subs = set()
     for sym in cycle(all_subs):
-        ts_str = client.ticker[sym]["timestamp"]
+        ts_str = client.ticker[sym]["time"]
         if ts_str is None:
             continue
-        ts = _make_date(ts_str)
-        diff = (datetime.utcnow() - ts).seconds
+        diff = (datetime.utcnow() - client.make_date(ts_str)).seconds
         if diff > stale_secs:
             if LOGFILE:
                 # Using ``*.call_soon`` doesn't seem to make a difference here
@@ -270,7 +212,7 @@ async def _check_timestamps(all_subs, client, kill_handler, strict=True,
                              msg="Killed by _check_timestamps")
                 break
             else:
-                client.ticker[sym]["timestamp"] = None  # <- mark as stale
+                client.ticker[sym]["time"] = None  # <- mark as stale
         else:
             stale_subs.discard(sym)
         try:
@@ -281,7 +223,7 @@ async def _check_timestamps(all_subs, client, kill_handler, strict=True,
     return "_check_timestamps cancelled"
 
 
-async def _paint_ticker_line(lnum, sym, semaphore, snapshots, ticker, fmt,
+async def _paint_ticker_line(client, lnum, sym, semaphore, snapshots, fmt,
                              colors, bq_pair, wait=1.0, pulse_over=PULSE_OVER):
     """
     The kwargs are tweakable and should perhaps be presented as global
@@ -289,7 +231,7 @@ async def _paint_ticker_line(lnum, sym, semaphore, snapshots, ticker, fmt,
     red/green flash threshold.
     """
     base, quote = bq_pair
-    if quote == "USD" and Dec(ticker.get(sym, {}).get("last", 0)) >= 10:
+    if "USD" in quote and Dec(client.ticker.get(sym, {}).get("last", 0)) >= 10:
         for _s in ("_vol", "ask", "_chg"):
             fmt = fmt.replace("f}{%s" % _s, ".2f}{%s" % _s)
     #
@@ -319,13 +261,13 @@ async def _paint_ticker_line(lnum, sym, semaphore, snapshots, ticker, fmt,
         if pulse:
             latest = last_seen
         else:
-            latest = decimate(dict(ticker.get(sym)))
+            latest = decimate(dict(client.ticker.get(sym)))
             if snapshots.get(sym) and snapshots[sym] == latest:
                 continue
             last_seen = snapshots.setdefault(sym, latest)
             # Better to save as decimal quotient and only display as percent
             change = ((latest["last"] - latest["open"]) / latest["open"])
-            latest["change"] = change
+            latest["chg"] = change
             # Use explicit value for ``normal`` instead of ``\e[39m`` to reset
             clrs = dict(_beg=bg, _sym=cfg.dim, _sepl=cfg.normal,
                         _sepr=cfg.dim, _prc=cfg.normal, _vol=cfg.dim,
@@ -335,7 +277,7 @@ async def _paint_ticker_line(lnum, sym, semaphore, snapshots, ticker, fmt,
         #
         volconv = None
         if VOL_UNIT:
-            volconv = _convert_volume(sym, base, quote, latest, ticker)
+            volconv = _convert_volume(client, sym, base, quote, latest)
         #
         if pulse:
             if HAS_24:
@@ -349,7 +291,7 @@ async def _paint_ticker_line(lnum, sym, semaphore, snapshots, ticker, fmt,
                 clrs["_vol"] = cfg.green if pulse == "+" else cfg.red
             _wait = 0.124 if PULSE == "fast" else 0.0764
             pulse = None
-        elif latest["timestamp"] is None:
+        elif latest["time"] is None:
             clrs.update(dict(_sym=cfg.dark, _sepl="", _sepr="",
                              _prc=(cfg.faint_shade if lnum % 2 else
                                    cfg.faint_tint), _vol="", _chg=""))
@@ -359,7 +301,7 @@ async def _paint_ticker_line(lnum, sym, semaphore, snapshots, ticker, fmt,
               abs(_pulse_over / 100 * last_seen["last"])):
             pulse = None
             _wait = 0.0764 if PULSE == "fast" else 0.124
-            if change - last_seen["change"] > 0:
+            if change - last_seen["chg"] > 0:
                 pulse = "+"
                 clrs["_beg"] = cbg.green
                 if not HAS_24:
@@ -386,13 +328,13 @@ async def _paint_ticker_line(lnum, sym, semaphore, snapshots, ticker, fmt,
     return "Cancelled _paint_ticker_line for: %s" % sym
 
 
-async def do_run_ticker(syms, client, loop, manage_subs=True,
+async def do_run_ticker(ranked, client, loop, manage_subs=True,
                         manage_sigs=True):
     """
-    Only works with ansi/vt terminals. Keys returned by api call::
+    Common keys::
 
-        "ask", "bid", "last", "open", "low", "high", "volume",
-        "volumeQuote", "timestamp", "symbol"
+        "ask", "bid", "last", "open", "volB",
+        "volQ", "time", "sym", "chg", "chgP"
 
     The value of ``open`` is that of ``last`` from 24 hours ago and is
     continuous/"moving". This can't be gotten with the various ``*Candle``
@@ -423,50 +365,23 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
         # object when the trap is sprung
         add_async_sig_handlers(("SIGINT", rt_sig_cb), loop=loop)
     #
-    from collections import namedtuple
-    c_bg_nt = namedtuple("background_colors",
-                         "shade tint dark red mix_red green mix_green")
-    c_fg_nt = namedtuple("foreground_colors",
-                         "normal dim dark faint_shade faint_tint "
-                         "red bright_red green bright_green head_alt")
-    tc_bg_tmpl, tc_fg_tmpl = "\x1b[48;2;{};{};{}m", "\x1b[38;2;{};{};{}m"
-    # Pulse blends (shade, tint): red(#293a49, #2a3d4d), gr(#12464f, #134953)
-    # These tones are too similar to justify defining separately
+    c_fg = client.foreground_256
+    c_bg = client.background_256
     if HAS_24:
-        c_bg = c_bg_nt(*(tc_bg_tmpl.format(*_hex_to_rgb(x)) for x in
-                         "#14374A #163E53 #153043 "
-                         "#3E3D48 #293a49 #105554 #12464f".split()))
-        c_fg = c_fg_nt(*(tc_fg_tmpl.format(*_hex_to_rgb(x)) for x in
-                         "#d3d7cf #a1b5c1 #325a6a #224a5a #153043 "
-                         "#BF4232 #E55541 #01A868 #0ACD8A #507691".split()))
-    else:
-        c_bg = c_bg_nt(*("\x1b[48;5;23%sm" % n for n in "6785555"))
-        c_fg = c_fg_nt(*("\x1b[38;5;%sm" % n for n in
-                         "253 250 243 237 236 95 167;1 65 83;1 228".split()))
-    #
-    ranked = []
-    # Need to preserve order, so can't use set union here
-    for sym in reversed(syms):
-        try:
-            symbol = await client.canonicalize_pair(sym)
-        except ValueError as e:
-            # Could use ``warnings.warn`` for stuff like this
-            print(e, "Removing...", file=sys.stderr)
+        if client.foreground_24 is None:
+            globals()["HAS_24"] = False
         else:
-            if symbol not in ranked:
-                ranked.append(symbol)
-    #
-    # TODO need auto-culling option  crap shoot
-    if len(ranked) > MAX_HEIGHT:
-        msg = ("Too many pairs requested for current terminal height. "
-               "Over by %d." % (len(ranked) - MAX_HEIGHT))
-        return {"error": msg}
+            c_fg = client.foreground_24
+            c_bg = client.background_24
     #
     all_subs = set(ranked)
     # Ensure conversion pairs available for all volume units
     if VOL_UNIT:
         if manage_subs:
-            all_subs |= {"BTCUSD", "ETHUSD"}
+            if VOL_UNIT == "USD" and "USD" not in client.markets:
+                assert "USDT" in client.markets
+                globals()["VOL_UNIT"] = "USDT"
+            all_subs |= await client.get_market_conversion_pairs(VOL_UNIT)
         else:
             client.echo("The ``VOL_UNIT`` option requires ``manage_subs``", 3)
             globals()["VOL_UNIT"] = None
@@ -475,8 +390,7 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
     out_futs = {}
     #
     # Abbreviations
-    _cv, cls, clt = _convert_volume, client.symbols, client.ticker
-    bC, qC = "baseCurrency", "quoteCurrency"
+    cls, clt = client.symbols, client.ticker
     #
     if manage_subs:
         await asyncio.gather(*map(client.subscribe_ticker, all_subs))
@@ -493,8 +407,11 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
             out_futs["error"] = "Problem subscribing to remote service"
             return out_futs
     #
+    # TODO determine practicality of using existing volume rankings reaped
+    # during arg parsing via in ``choose_pairs()``
     if VOL_UNIT and VOL_SORTED:
-        vr = sorted((_cv(s, cls[s][bC], cls[s][qC], decimate(clt[s]), clt), s)
+        vr = sorted((_convert_volume(client, s, cls[s]["curB"], cls[s]["curQ"],
+                                     decimate(clt[s])), s)
                     for s in ranked)
         ranked = [s for v, s in vr]
     #
@@ -508,15 +425,18 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
     sep = "/"
     volstr = "Vol (%s)" % (VOL_UNIT or "base") + ("  " if VOL_UNIT else "")
     if VOL_UNIT:
-        vprec = "USD ETH BTC".split().index(VOL_UNIT)
+        try:
+            vprec = "USD ETH BTC".split().index(VOL_UNIT)
+        except ValueError:
+            vprec = 0  # Covers USDT and corners like BNB, XRP, BCH
     # Market (symbol) pairs will be "concatenated" (no intervening padding)
     sym_widths = (
         # Base
-        max(len(cls[s][bC]) for s in ranked),
+        max(len(cls[s]["curB"]) for s in ranked),
         # Sep
         len(sep),
         # Quote (corner case: left-justifying, so need padding)
-        max(len(cls[s][qC]) for s in ranked)
+        max(len(cls[s]["curQ"]) for s in ranked)
     )
     # Can't decide among exchange name, "" (blank), "Pair," and "Product"
     widths = (
@@ -526,10 +446,11 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
         max(len("{:.2f}".format(Dec(clt[s]["last"])) if
                 "USD" in s else clt[s]["last"]) for s in ranked),
         # 3: Volume
-        max(*(len("{:,.{pc}f}".format(_cv(s, cls[s][bC], cls[s][qC],
-                                          decimate(clt[s]), clt), pc=vprec) if
-                  VOL_UNIT else clt[s]["volume"]) for s in ranked),
-            len(volstr)),
+        max(*(len("{:,.{pc}f}"
+                  .format(_convert_volume(client, s, cls[s]["curB"],
+                                          cls[s]["curQ"], decimate(clt[s])),
+                          pc=vprec) if VOL_UNIT else clt[s]["volB"])
+              for s in ranked), len(volstr)),
         # 4: Bid
         max(len("{:.2f}".format(Dec(clt[s]["bid"])) if
                 "USD" in s else clt[s]["bid"]) for s in ranked),
@@ -545,7 +466,7 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
     widths = (pad,  # <- 0: Left padding
               *(l + pad for l in widths),
               pad)  # <- 7: Right padding
-    del _cv, cls, clt, bC, qC
+    del cls, clt
     #
     # Die nicely when needed width exceeds what's available
     if sum(widths) > os.get_terminal_size().columns:
@@ -564,10 +485,10 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
                    "{_vol}",
                    ("{volconv:>%d,.%df}%s" % (widths[3] - pad, vprec,
                                               " " * pad) if
-                    VOL_UNIT else "{volume:<%df}" % widths[3]),
+                    VOL_UNIT else "{volB:<%df}" % widths[3]),
                    "{bid:<%df}" % widths[4],
                    "{ask:<%df}" % widths[5],
-                   "{_chg}{change:>+%d.3%%}" % widths[6],
+                   "{_chg}{chg:>+%d.3%%}" % widths[6],
                    "{:%d}{_end}" % widths[7]))
     #
     _print_heading(client, (c_bg, c_fg), widths, len(ranked), volstr)
@@ -576,12 +497,13 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
     snapshots = {}
     coros = []
     for lnum, sym in enumerate(ranked):
-        base = client.symbols[sym]["baseCurrency"]
-        quote = client.symbols[sym]["quoteCurrency"]
+        base = client.symbols[sym]["curB"]
+        quote = client.symbols[sym]["curQ"]
+        # XXX verify original figuring in e112df6 was faulty for this:
         fmt_nudge = fmt.replace("{quote_w}", "%d" %
-                                (len(quote) + sym_widths[0] - len(base) + pad))
+                                (widths[1] - len(base) - len(sep)))
         coros.append(_paint_ticker_line(
-            lnum, sym, semaphore, snapshots, client.ticker, fmt_nudge,
+            client, lnum, sym, semaphore, snapshots, fmt_nudge,
             (c_bg, c_fg), (base, quote), wait=(0.1 * len(ranked)),
             pulse_over=(PULSE_OVER if PULSE else 100.0)
         ))
@@ -622,29 +544,111 @@ async def do_run_ticker(syms, client, loop, manage_subs=True,
     return out_futs
 
 
-async def main(loop, syms):
-    Client = HitBTCWebSocketsClient
+async def choose_pairs(client):
+    """
+    If the length of named pairs alone exceeds the terminal height, trim
+    from the end (rightmost args). Afterwards, reduce NUM leaders, as
+    required. Print a warning for dropped syms if AUTO_CULL is on,
+    otherwise raise a ValueError. Note: This will probably have to be
+    redone when argparse stuff is added.
+    """
+    num = None
+    syms = []
+    msg = []
+    #
+    if len(sys.argv) == 1:
+        num = min(SHOW_FIRST, MAX_HEIGHT)
+    elif sys.argv[1].isdigit():
+        num = int(sys.argv[1])
+        if num == 0:  # Don't auto-fill regardless of AUTO_FILL
+            num = None
+        syms = sys.argv[2:]
+    else:
+        syms = sys.argv[1:]
+        if AUTO_FILL:  # ... till SHOW_FIRST (or MAX_HEIGHT)
+            num = 0
+    #
+    ranked = []
+    num_skipped = 0
+    # Need to preserve order, so can't use set union here
+    for sym in reversed(syms):
+        try:
+            symbol = await client.canonicalize_pair(sym)
+        except ValueError as e:
+            # Could use ``warnings.warn`` for stuff like this
+            msg += ["%r not found, removing..." % sym]
+            if AUTO_FILL:
+                num_skipped += 1
+        else:
+            if symbol not in ranked:
+                ranked.append(symbol)
+    #
+    if len(ranked) > MAX_HEIGHT:
+        msg += ["Too many pairs requested for current terminal height. "
+                "Over by %d." % (len(ranked) - MAX_HEIGHT)]
+        if not AUTO_CULL:
+            raise ValueError(msg)
+        culled = ranked[-1 * (len(ranked) - MAX_HEIGHT):]
+        ranked = ranked[:-1 * len(culled)]
+        msg += ["\nAUTO_CULL is on; dropping the following: "
+                + ", ".join(culled).rstrip(", ")]
+    #
+    if num == 0:
+        num = min(SHOW_FIRST, MAX_HEIGHT) - len(ranked)
+    elif num is not None:
+        if num + len(ranked) > MAX_HEIGHT:
+            num = MAX_HEIGHT - len(ranked)
+            msg += ["Too many NUM leaders requested for current terminal "
+                    "height; reducing to %d" % num]
+        elif num_skipped:
+            num = min(num + num_skipped, MAX_HEIGHT - len(ranked))
+    #
+    if msg:
+        if LOGFILE:
+            client.echo("\n".join(msg))
+        else:
+            print(*msg, sep="\n", file=sys.stderr)
+            from time import sleep
+            sleep(1)
+    #
+    if not AUTO_FILL or not num:  # <- num might have been decremented to 0
+        return ranked
+    assert len(ranked) + num <= MAX_HEIGHT
+    #
+    # If VOL_SORTED is False, named pairs will be appear above ranked ones
+    for symbol in await client.get_volume_leaders():
+        if symbol not in ranked:
+            ranked.append(symbol)
+            num -= 1
+        if num < 1:
+            break
+    return ranked
+
+
+async def main(loop, Client):
     async with Client(VERBOSITY, LOGFILE, USE_AIOHTTP) as client:
         #
-        rt_fut = do_run_ticker(syms, client, loop)
+        ranked_syms = await choose_pairs(client)
+        #
+        rt_fut = do_run_ticker(ranked_syms, client, loop)
         return await rt_fut
 
 
 def main_entry():
     global HAS_24, LOGFILE, PULSE, PULSE_OVER, HEADING, MAX_HEIGHT, \
-            STRICT_TIME, VERBOSITY, VOL_SORTED, VOL_UNIT, USE_AIOHTTP
+            STRICT_TIME, VERBOSITY, VOL_SORTED, VOL_UNIT, USE_AIOHTTP, \
+            AUTO_FILL, AUTO_CULL
     #
     if sys.platform != 'linux':
         raise SystemExit("Sorry, but this probably only works on Linux")
     if sys.version_info < (3, 6):
         raise SystemExit("Sorry, but this thing needs Python 3.6+")
     #
-    from enum import Enum
-
-    class Headings(Enum):
-        slim = 1
-        normal = hr_over = hr_under = 2
-        full = 3
+    if len(sys.argv) > 1 and sys.argv[1] in ("--help", "-h"):
+        print(*(l.replace("    ", "", 1) for l in
+                __doc__.partition("\nWarn")[0].partition("::\n")[-1]
+                .splitlines(True)), sep="")
+        sys.exit()
     #
     VERBOSITY = int(os.getenv("VERBOSITY", VERBOSITY))
     USE_AIOHTTP = any(s == os.getenv("USE_AIOHTTP", str(USE_AIOHTTP)).lower()
@@ -662,36 +666,28 @@ def main_entry():
     PULSE_OVER = float(os.getenv("PULSE_OVER", PULSE_OVER))
     _heading = os.getenv("HEADING", HEADING)
     HEADING = (_heading if _heading in Headings.__members__ else HEADING)
+    MAX_HEIGHT = os.get_terminal_size().lines - Headings[HEADING].value
     VOL_SORTED = any(s == os.getenv("VOL_SORTED", str(VOL_SORTED)).lower()
                      for s in "yes on true 1".split())
     VOL_UNIT = os.getenv("VOL_UNIT", VOL_UNIT)
     if VOL_UNIT.lower() in ("", "null", "none"):
         VOL_UNIT = None
-    #
-    num, syms = None, []
-    # TODO combine this stuff with the max-rows check in do_run()
-    MAX_HEIGHT = os.get_terminal_size().lines - Headings[HEADING].value
-    if len(sys.argv) == 1:
-        num = min(MAX_HEIGHT, SHOW_FIRST)
-    elif sys.argv[1] in ("--help", "-h"):
-        print(*(l.replace("    ", "", 1) for l in
-                __doc__.partition("\nWarn")[0].partition("::\n")[-1]
-                .splitlines(True)), sep="")
-        sys.exit()
-    elif sys.argv[1].isdigit():
-        num = int(sys.argv[1])
-        syms = sys.argv[2:]
-    else:
-        syms = sys.argv[1:]
-    if num:
-        syms += _get_top_markets(num)
-    if not syms:
-        raise ValueError("Could not determine trading pairs to display")
+    AUTO_FILL = any(s == os.getenv("AUTO_FILL", str(AUTO_FILL)).lower()
+                    for s in "yes on true 1".split())
+    AUTO_CULL = any(s == os.getenv("AUTO_CULL", str(AUTO_CULL)).lower()
+                    for s in "yes on true 1".split())
     #
     loop = asyncio.get_event_loop()
     add_async_sig_handlers("SIGINT SIGTERM".split(), loop=loop)
     #
     LOGFILE = os.getenv("LOGFILE", None)
+    #
+    # XXX still experimental
+    CLIENT = os.getenv("CLIENT", "hitbtc").lower()
+    if CLIENT == "binance":
+        Client = binance.BinanceClient
+    else:
+        Client = hitbtc.HitBTCClient
     #
     # Since this doesn't use curses, shell out to get cursor vis
     # escape sequences, if supported (absent in ansi and vt100).
@@ -710,11 +706,11 @@ def main_entry():
             from contextlib import redirect_stderr
             with open(os.getenv("LOGFILE"), "w") as LOGFILE:
                 with redirect_stderr(LOGFILE):
-                    ppj(loop.run_until_complete(main(loop, syms)),
+                    ppj(loop.run_until_complete(main(loop, Client)),
                         file=LOGFILE)
         else:
             VERBOSITY = 3
-            results = loop.run_until_complete(main(loop, syms))
+            results = loop.run_until_complete(main(loop, Client))
             for item in (results, results.get("gathered", {}),
                          results.get("subs", {})):
                 try:
