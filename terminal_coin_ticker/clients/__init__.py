@@ -71,6 +71,7 @@ class ExchangeClient:
         # updating is less complicated
         self.ticker = {}
         self.symbols = None
+        self.quantize = False
         self.markets = None
         self.conversions = None
         self.ticker_subscriptions = set()
@@ -239,7 +240,7 @@ class ExchangeClient:
         import urllib.request
         from decimal import Decimal as Dec
         from urllib.error import HTTPError
-        url = self.vol_url
+        url = "".join((self.rest["base"], self.rest["ticker"]))
         try:
             with urllib.request.urlopen(url) as f:
                 data = json.load(f)

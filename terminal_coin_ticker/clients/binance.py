@@ -81,7 +81,11 @@ class BinanceClient(ExchangeClient):
     """
     exchange = "Binance"
     url = "wss://stream.binance.com:9443"
-    vol_url = "https://api.binance.com/api/v1/ticker/24hr"
+    rest = {
+        "base":  "https://api.binance.com/api/v1",
+        "ticker": "/ticker/24hr",  # used by volume ranker
+        "symbols": "/exchangeInfo"
+    }
     trans = tmap
 
     def __init__(self, verbosity=VERBOSITY, logfile=None,
@@ -89,6 +93,7 @@ class BinanceClient(ExchangeClient):
         self.lock = asyncio.Lock()
         self.streams = set()
         super().__init__(verbosity, logfile, use_aiohttp)
+        self.quantize = True
 
     async def _reload(self):
         if self.lock.locked():
@@ -168,11 +173,15 @@ class BinanceClient(ExchangeClient):
         return None
 
     async def get_symbols(self, symbol=None, cache_result=True):
+        """
+        This uses a normal http GET request via the REST API
+        TODO: add native keys and example values here
+        """
         if self.symbols is None:
             import json
             import urllib.request
             from urllib.error import HTTPError
-            url = "https://api.binance.com/api/v1/exchangeInfo"
+            url = "".join((self.rest["base"], self.rest["symbols"]))
             try:
                 with urllib.request.urlopen(url) as f:
                     data = json.load(f)
@@ -180,14 +189,14 @@ class BinanceClient(ExchangeClient):
                 raise ConnectionError("Problem connecting to %s" % url)
             if "error" in data:
                 raise ConnectionError(data["error"])
-            # Actually, there's no reason to save the tick size, since usable
-            # precision can be inferred from smallest val sans trailing zeroes
-            self.symbols = {s["symbol"]: dict(curB=s[self.trans.curB],
-                                              curQ=s[self.trans.curQ],
-                                              tick=next(d[self.trans.tick] for
-                                                        d in s["filters"] if
-                                                        self.trans.tick in d))
-                            for s in data["symbols"]}
+            self.symbols = {
+                s["symbol"]: dict(curB=s[self.trans.curB],
+                                  curQ=s[self.trans.curQ],
+                                  tick=next(d[self.trans.tick].rstrip("0") for
+                                            d in s["filters"] if
+                                            self.trans.tick in d))
+                for s in data["symbols"]
+            }
             self.markets = {v["curQ"] for v in self.symbols.values()}
             if "123456" in self.symbols:
                 del self.symbols["123456"]

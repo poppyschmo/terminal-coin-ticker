@@ -99,7 +99,11 @@ truecolor_fg = make_truecolor_palette("foreground", **foreground)
 class HitBTCClient(ExchangeClient):
     exchange = "HitBTC"
     url = "wss://api.hitbtc.com/api/2/ws"
-    vol_url = "https://api.hitbtc.com/api/2/public/ticker"
+    rest = {
+        "base": "https://api.hitbtc.com/api/2",
+        "ticker": "/public/ticker",  # used by volume ranker
+        "symbols": "/public/symbol"  # unused, has native ws variant
+    }
     trans = tmap
     background_24 = truecolor_bg
     foreground_24 = truecolor_fg

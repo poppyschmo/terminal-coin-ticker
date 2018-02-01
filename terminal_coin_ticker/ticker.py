@@ -231,15 +231,12 @@ async def _paint_ticker_line(client, lnum, sym, semaphore, snapshots, fmt,
     red/green flash threshold.
     """
     base, quote = bq_pair
-    if "USD" in quote and Dec(client.ticker.get(sym, {}).get("last", 0)) >= 10:
-        for _s in ("_vol", "ask", "_chg"):
-            fmt = fmt.replace("f}{%s" % _s, ".2f}{%s" % _s)
-    #
     cbg, cfg = colors
     sep = "/"
     bg = cbg.shade if lnum % 2 else cbg.tint
     up = "\x1b[A" * lnum + "\r"
     down = "\x1b[B" * lnum
+    tick = Dec(client.symbols[sym]["tick"])
     last_seen = {}
     #
     # Delay pulsing while staggering initial update
@@ -261,7 +258,10 @@ async def _paint_ticker_line(client, lnum, sym, semaphore, snapshots, fmt,
         if pulse:
             latest = last_seen
         else:
-            latest = decimate(dict(client.ticker.get(sym)))
+            latest = decimate(dict(client.ticker[sym]))
+            if client.quantize is True:
+                for key in ("last", "ask", "bid"):
+                    latest[key] = latest[key].quantize(tick)
             if snapshots.get(sym) and snapshots[sym] == latest:
                 continue
             last_seen = snapshots.setdefault(sym, latest)
@@ -478,18 +478,20 @@ async def do_run_ticker(ranked, client, loop, manage_subs=True,
                 *map(client.unsubscribe_ticker, all_subs)
             )
         return out_futs
-    # Format string for actual line items
-    fmt = "".join(("{_beg}{:%d}" % widths[0],
-                   "{_sym}{base}{_sepl}{sep}{_sepr}{quote:<{quote_w}}",
-                   "{_prc}{last:<%df}" % widths[2],
-                   "{_vol}",
-                   ("{volconv:>%d,.%df}%s" % (widths[3] - pad, vprec,
-                                              " " * pad) if
-                    VOL_UNIT else "{volB:<%df}" % widths[3]),
-                   "{bid:<%df}" % widths[4],
-                   "{ask:<%df}" % widths[5],
-                   "{_chg}{chg:>+%d.3%%}" % widths[6],
-                   "{:%d}{_end}" % widths[7]))
+    # Format string for actual line items.
+    fmt_parts = [
+        "{_beg}{:%d}" % widths[0],
+        "{_sym}{base}{_sepl}{sep}{_sepr}{quote:<{quote_w}}",
+        "{_prc}{last:<%dg}" % widths[2],
+        "{_vol}" + ("{volconv:>%d,.%df}%s" %
+                    (widths[3] - pad, vprec, " " * pad) if
+                    VOL_UNIT else "{volB:<%dg}" % widths[3]),
+        "{bid:<%dg}" % widths[4],
+        "{ask:<%dg}" % widths[5],
+        "{_chg}{chg:>+%d.3%%}" % widths[6],
+        "{:%d}{_end}" % widths[7]
+    ]
+    fmt = "".join(fmt_parts)
     #
     _print_heading(client, (c_bg, c_fg), widths, len(ranked), volstr)
     #
@@ -499,9 +501,15 @@ async def do_run_ticker(ranked, client, loop, manage_subs=True,
     for lnum, sym in enumerate(ranked):
         base = client.symbols[sym]["curB"]
         quote = client.symbols[sym]["curQ"]
-        # XXX verify original figuring in e112df6 was faulty for this:
-        fmt_nudge = fmt.replace("{quote_w}", "%d" %
-                                (widths[1] - len(base) - len(sep)))
+        fmt_nudge = (
+            "".join(
+                (fmt_parts[n].replace("g}", ".2f}") if n in (1, 4, 5) else
+                 fmt_parts[n] for n in range(len(fmt_parts)))
+            )
+            if "USD" in quote and Dec(client.ticker[sym]["last"]) >= Dec(10)
+            else fmt
+        ).replace("{quote_w}", "%d" % (widths[1] - len(base) - len(sep)))
+        #
         coros.append(_paint_ticker_line(
             client, lnum, sym, semaphore, snapshots, fmt_nudge,
             (c_bg, c_fg), (base, quote), wait=(0.1 * len(ranked)),
