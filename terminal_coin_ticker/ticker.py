@@ -5,13 +5,12 @@ Usage::
 
     tc-ticker [NUM] [PAIR ...]
 
-    Show NUM volume leaders and/or named PAIRs, which should take
-    one of these (case-insensitive) forms:
+    Show NUM volume leaders and/or named PAIRs, which can take any of the
+    following (case-insensitive) forms:
 
-        basequote base_quote base/quote "base quote"
+        basequote, base_quote, base/quote, "base quote"
 
-    Env-var-based options are listed atop the main script but are
-    subject to change.
+    For now, all options are env-var based and subject to change
 
 Warning
 -------
@@ -37,20 +36,20 @@ from terminal_coin_ticker import (  # noqa E402
 )
 from terminal_coin_ticker.clients import hitbtc, binance  # noqa E402
 
-SHOW_FIRST = 24
-
 # Env vars
-VERBOSITY = 6        # Ignored unless LOGFILE is also exported
-USE_AIOHTTP = False  # Ignored unless websockets is also installed
-VOL_SORTED = True    # Sort all pairs by volume, auto-selected or named
-VOL_UNIT = "USD"     # BTC, ETH, or None for per-pair base currencies
-HAS_24 = False       # For apps and utils that outlaw COLORTERM
-STRICT_TIME = True   # Die when service notifications aren't updating
-PULSE = "normal"     # Flash style of "normal," "fast," or null
-PULSE_OVER = 0.125   # Flash threshold as percent change since last update
+EXCHANGE = "HitBTC"  # Or Binance (slim pickings, at the moment)
+VOL_SORTED = True    # Sort all pairs by volume, AUTO_FILL'd or named
+VOL_UNIT = "USD"     # BTC, ETH, etc., or null for base currencies
+HAS_24 = False       # Override COLORTERM if outlawed in environment
+PULSE = "normal"     # Flash style of "normal," "fast," or null (off)
+PULSE_OVER = 0.125   # Flash threshold as % change in last price
 HEADING = "normal"   # Also "hr_over," "hr_under," "full," and "slim"
-AUTO_CULL = True     # Drop excess PAIRs and warn instead of exiting
-AUTO_FILL = True     # Absent NUM, add volume leaders up to SHOW_FIRST rows
+AUTO_CULL = True     # Drop excess PAIRs, and warn instead of exiting
+AUTO_FILL = True     # Absent NUM, add volume leaders till MAX_FILL
+MAX_FILL = 24        # Or null/non-int to use term height (absent NUM)
+STRICT_TIME = True   # Die when service notifications aren't updating
+VERBOSITY = 6        # Ignored without LOGFILE (device, file, etc.)
+USE_AIOHTTP = False  # Ignored unless ``websockets`` is also installed
 
 # TTL vars
 MAX_STALE = 0.5      # Tolerance threshold ratio of stale/all pairs
@@ -377,6 +376,10 @@ async def do_run_ticker(ranked, client, loop, manage_subs=True,
     all_subs = set(ranked)
     # Ensure conversion pairs available for all volume units
     if VOL_UNIT:
+        if "USD" not in VOL_UNIT and VOL_UNIT not in client.markets:
+            # XXX should eventually move this block somewhere else
+            return {"error": "%r is not a market currency supported by %s" %
+                    (VOL_UNIT, client.exchange)}
         if manage_subs:
             if VOL_UNIT == "USD" and "USD" not in client.markets:
                 assert "USDT" in client.markets
@@ -565,7 +568,7 @@ async def choose_pairs(client):
     msg = []
     #
     if len(sys.argv) == 1:
-        num = min(SHOW_FIRST, MAX_HEIGHT)
+        num = min(MAX_FILL, MAX_HEIGHT)
     elif sys.argv[1].isdigit():
         num = int(sys.argv[1])
         if num == 0:  # Don't auto-fill regardless of AUTO_FILL
@@ -573,7 +576,7 @@ async def choose_pairs(client):
         syms = sys.argv[2:]
     else:
         syms = sys.argv[1:]
-        if AUTO_FILL:  # ... till SHOW_FIRST (or MAX_HEIGHT)
+        if AUTO_FILL:  # ... till MAX_FILL (or MAX_HEIGHT)
             num = 0
     #
     ranked = []
@@ -602,7 +605,7 @@ async def choose_pairs(client):
                 + ", ".join(culled).rstrip(", ")]
     #
     if num == 0:
-        num = min(SHOW_FIRST, MAX_HEIGHT) - len(ranked)
+        num = min(MAX_FILL, MAX_HEIGHT) - len(ranked)
     elif num is not None:
         if num + len(ranked) > MAX_HEIGHT:
             num = MAX_HEIGHT - len(ranked)
@@ -645,7 +648,7 @@ async def main(loop, Client):
 def main_entry():
     global HAS_24, LOGFILE, PULSE, PULSE_OVER, HEADING, MAX_HEIGHT, \
             STRICT_TIME, VERBOSITY, VOL_SORTED, VOL_UNIT, USE_AIOHTTP, \
-            AUTO_FILL, AUTO_CULL
+            AUTO_FILL, AUTO_CULL, EXCHANGE, MAX_FILL
     #
     if sys.platform != 'linux':
         raise SystemExit("Sorry, but this probably only works on Linux")
@@ -653,9 +656,20 @@ def main_entry():
         raise SystemExit("Sorry, but this thing needs Python 3.6+")
     #
     if len(sys.argv) > 1 and sys.argv[1] in ("--help", "-h"):
-        print(*(l.replace("    ", "", 1) for l in
-                __doc__.partition("\nWarn")[0].partition("::\n")[-1]
-                .splitlines(True)), sep="")
+        print(__doc__.partition("\nWarn")[0].partition("::\n")[-1])
+        with open(__file__) as f:
+            hunks = f.read().split("\n\n")
+        lines = [p for p in hunks if
+                 p.startswith("# Env vars")].pop().split("\n")[1:]
+        from ast import literal_eval
+        fmt = "{:<4}{:<12}{:<8}{:<9}{}"
+        for line in lines:
+            name, rest = line.split("=")
+            val, doc = rest.split("#")
+            typ = "<%s>" % type(literal_eval(val.strip())).__name__
+            val = ("%s" % val.strip('" ').replace("True", "1")
+                   .replace("False", "0").replace("None", "''"))
+            print(fmt.format("", name.strip(), typ, val, doc.strip()))
         sys.exit()
     #
     VERBOSITY = int(os.getenv("VERBOSITY", VERBOSITY))
@@ -680,19 +694,26 @@ def main_entry():
     VOL_UNIT = os.getenv("VOL_UNIT", VOL_UNIT)
     if VOL_UNIT.lower() in ("", "null", "none"):
         VOL_UNIT = None
+    else:
+        VOL_UNIT = VOL_UNIT.upper()
     AUTO_FILL = any(s == os.getenv("AUTO_FILL", str(AUTO_FILL)).lower()
                     for s in "yes on true 1".split())
     AUTO_CULL = any(s == os.getenv("AUTO_CULL", str(AUTO_CULL)).lower()
                     for s in "yes on true 1".split())
+    MAX_FILL = os.getenv("MAX_FILL", str(MAX_FILL))
+    if MAX_FILL.isdigit():
+        MAX_FILL = int(MAX_FILL)
+    else:
+        MAX_FILL = MAX_HEIGHT
     #
     loop = asyncio.get_event_loop()
     add_async_sig_handlers("SIGINT SIGTERM".split(), loop=loop)
     #
     LOGFILE = os.getenv("LOGFILE", None)
     #
-    # XXX still experimental
-    CLIENT = os.getenv("CLIENT", "hitbtc").lower()
-    if CLIENT == "binance":
+    # XXX should probably print message saying exchange not yet supported
+    EXCHANGE = os.getenv("EXCHANGE", EXCHANGE).lower()
+    if EXCHANGE == "binance":
         Client = binance.BinanceClient
     else:
         Client = hitbtc.HitBTCClient

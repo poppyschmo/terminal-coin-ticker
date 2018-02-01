@@ -20,14 +20,14 @@ VERBOSITY = 6
 # Stream keys are more idiosyncratic and handled granularly by each method
 tmap = Transmap(
     sym="symbol",
-    time="time",
+    time="closeTime",  # Pertains to REST ticker only
     last="lastPrice",
     volB="volume",
     volQ="quoteVolume",
     bid="bidPrice",
     ask="askPrice",
     open="openPrice",
-    chg=None,  # OR convert to quotient by dividing by open
+    chg=None,          # Omit, seems this doesn't use "last"
     chgP="priceChangePercent",
     curB="baseAsset",
     curQ="quoteAsset",
@@ -92,8 +92,9 @@ class BinanceClient(ExchangeClient):
                  use_aiohttp=USE_AIOHTTP):
         self.lock = asyncio.Lock()
         self.streams = set()
-        super().__init__(verbosity, logfile, use_aiohttp)
         self.quantize = True
+        self.prepopulate = True
+        super().__init__(verbosity, logfile, use_aiohttp)
 
     async def _reload(self):
         if self.lock.locked():
@@ -172,7 +173,7 @@ class BinanceClient(ExchangeClient):
             self.ticker[sym].update({"last": data["p"], "time": data["E"]})
         return None
 
-    async def get_symbols(self, symbol=None, cache_result=True):
+    async def get_symbols(self, symbol=None):
         """
         This uses a normal http GET request via the REST API
         TODO: add native keys and example values here
@@ -232,6 +233,12 @@ class BinanceClient(ExchangeClient):
         start_trade = await self.subscribe_agg_trade(symbol)
         await self._reload()
         start_ticker = self.do_poll(symbol, "chgP")
+        #
+        if self.prepop_Task and self.prepop_Task.done():
+            prepop = self.prepop_Task.result()
+            if prepop.get(symbol) is not None:
+                self.ticker.setdefault(symbol, {}).update(prepop[symbol])
+        #
         await asyncio.wait((start_trade, start_ticker))
         if self.verbose:
             self.echo("adding %s to ticker_subscriptions" % symbol)

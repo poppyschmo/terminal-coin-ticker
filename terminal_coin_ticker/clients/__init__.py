@@ -57,6 +57,9 @@ class ExchangeClient:
     background_24 = None
     foreground_24 = None
 
+    quantize = False
+    prepopulate = False
+
     def __init__(self, verbosity=VERBOSITY, logfile=None,
                  use_aiohttp=USE_AIOHTTP):
         self.verbose = verbosity
@@ -67,16 +70,15 @@ class ExchangeClient:
         elif not use_aiohttp and "websockets" not in globals():
             use_aiohttp = True
         self.aio = use_aiohttp
-        # Next two are kept separate so ticker data can be preserved and
-        # updating is less complicated
+        #
         self.ticker = {}
         self.symbols = None
-        self.quantize = False
         self.markets = None
         self.conversions = None
         self.ticker_subscriptions = set()
         self._consumers = {self.consume_response: 0}
         self.consumers = [self.consume_response]  # Ranked version of above
+        self.prepop_Task = None
         # These are only for logging send/recv raw message i/o
         try:
             reprlib.aRepr.maxstring = os.get_terminal_size().columns - 2
@@ -223,10 +225,12 @@ class ExchangeClient:
             self.conversions = all_convs & self.symbols.keys()
         if quote:
             if "USD" in quote:
+                # Assume USD is always the dominant quote currency
                 return {p for p in self.conversions if
                         any(p.endswith(q) for q in ("USD", "USDT"))}
             else:
-                return {p for p in self.conversions if p.endswith(quote)}
+                # Might need to cross-convert, so get both
+                return {p for p in self.conversions if quote in p}
         else:
             return self.conversions
 
@@ -248,7 +252,12 @@ class ExchangeClient:
             raise ConnectionError("Problem connecting; try again later")
         if "error" in data:
             raise ConnectionError(data["error"])
+        #
         tr = self.trans
+        if self.prepopulate is True:
+            # Consumer should await this or check ``*.done()``
+            self.prepop_Task = asyncio.ensure_future(self.do_prepopulate(data))
+        #
         conv_d = {}
         for m in self.markets - {"USD", "USDT"}:
             for s in data:
@@ -274,6 +283,22 @@ class ExchangeClient:
             return (n for t, n in conv_it)
         else:
             return [t[1] for t, n in zip(conv_it, range(num))]
+
+    async def do_prepopulate(self, data):
+        """
+        Used for "priming" the ``ticker`` dict before streams are fully
+        running, thus preventing any laggards from holding up the show.
+        Records will likely be stale and should be voided if not updated
+        in short order.
+        """
+        tr = self.trans
+        return {
+            d[tr.sym]: {
+                us: d[them] for us, them in tr._asdict().items() if
+                them and d.get(them) is not None
+            }
+            for d in data
+        }
 
 
 def _hex_to_rgb(hstr):

@@ -189,7 +189,7 @@ class HitBTCClient(ExchangeClient):
         del self.replies[rqid]
         return result
 
-    async def get_symbols(self, symbol=None, cache_result=True):
+    async def get_symbols(self, symbol=None):
         if self.symbols is None:
             rqid, message = self.prep_request("getSymbols", {})
             await self.do_send(message)
