@@ -2,6 +2,9 @@
 # -*- coding: UTF-8 -*-
 """
 https://github.com/binance-exchange/binance-official-api-docs
+
+Stylesheet_:
+.. _: https://www.binance.com/resources/css/global.css
 """
 # This file is part of <https://github.com/poppyschmo/terminal-coin-ticker>
 
@@ -11,7 +14,7 @@ from terminal_coin_ticker import (
     add_async_sig_handlers, remove_async_sig_handlers, ppj
 )
 from terminal_coin_ticker.clients import (
-    USE_AIOHTTP, Transmap, ExchangeClient,
+    USE_AIOHTTP, Transmap, ExchangeClient, make_truecolor_palette
 )
 
 VERBOSITY = 6
@@ -33,6 +36,45 @@ tmap = Transmap(
     curQ="quoteAsset",
     tick="tickSize"
 )
+
+bg_v1 = {
+    "shade":        "#f6f5f2",  # blend: lt gray, beige
+    "tint":         "#fbfaf8",  # blend: beige, off-white
+    "dark":         "#505050",  # dark menu gray, lightened
+    "red":          "#faebf2",  # orderbook/depth pink
+    "mix_red":      "#f9f4f4",  # 3-way avg, less red than #faf2f4 (acc avg)
+    "green":        "#eff7e4",  # orderbook/depth green
+    "mix_green":    "#f4f8ed",  # acc avg, greener than 3-way #f6f8f0
+}
+
+fg_v1 = {
+    "normal":       "#baad8e",  # platinum-ish blend: bg tint, logo
+    "dim":          "#606060",  # dark gray from markets tabs
+    "dark":         "#f3ba2f",  # logo orange (raster)
+    "faint_shade":  "#fbfaf8",  # bg tint
+    "faint_tint":   "#f6f5f2",  # bg shade
+    "red":          "#ea388d",  # magenta (desat from orig/css #ea0070)
+    "bright_red":   "#000000",  # n/a
+    "green":        "#70a800",  # green
+    "bright_green": "#000000",  # n/a
+    "head_alt":     "#bcbcbc",  # lt gray from main menu cats
+}
+
+bg_v2 = dict(bg_v1)
+fg_v2 = dict(fg_v1)
+
+bg_v2["dark"] = "#fcfcfb"       # off-white
+fg_v2.update({
+    "dim":          "#7c797d",  # blend markets gray/violet-tint gray
+    "dark":         "#c08f13",  # dark/sat gold (blend of logo, usd, v1 dim)
+    "head_alt":     fg_v1["normal"],
+})
+
+# TODO add getter (or whatever) so this can be set dynamically
+background = bg_v2
+foreground = fg_v2
+truecolor_bg = make_truecolor_palette("background", **background)
+truecolor_fg = make_truecolor_palette("foreground", **foreground)
 
 
 class BinanceClient(ExchangeClient):
@@ -87,6 +129,8 @@ class BinanceClient(ExchangeClient):
         "symbols": "/exchangeInfo"
     }
     trans = tmap
+    background_24 = truecolor_bg
+    foreground_24 = truecolor_fg
 
     def __init__(self, verbosity=VERBOSITY, logfile=None,
                  use_aiohttp=USE_AIOHTTP):

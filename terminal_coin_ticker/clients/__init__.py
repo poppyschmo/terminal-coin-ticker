@@ -4,6 +4,31 @@
 Common client stuff goes here. Client classes need only only support those API
 calls needed by the ticker. Non-ticker-specific utils, etc. should go in the
 top-level init.
+
+Default colors reference::
+
+    "background": {
+        "shade":        "#303030", //236  Even rows
+        "tint":         "#3a3a3a", //237  Odd rows
+        "dark":         "#444444", //238  Heading
+        "red":          "#262626", //235  Only differs from mix for 24-bit
+        "mix_red":      "#262626", //235  Values are same for tint/shade
+        "green":        "#262626", //235  ... because the difference is
+        "mix_green":    "#262626", //235  ... imperceptible
+    },
+
+    "foreground": {
+        "normal":       "#dadada", //253   Last, sep
+        "dim":          "#bcbcbc", //250   Vol, Bid, Ask, 256-color heading
+        "dark":         "#767676", //243   Exchange name and HR
+        "faint_shade":  "#3a3a3a", //237   Used for stale rows, confusing bec
+        "faint_tint":   "#303030", //236   ... tint/shade semantics swapped
+        "red":          "#875f5f", //95    Change
+        "bright_red":   "#d75f5f", //167;1 bold, 256-only
+        "green":        "#5f875f", //65    Change
+        "bright_green": "#5fff5f", //83;1  bold, 256-only
+        "head_alt":     "#ffff87", //228   24-bit heading cats color
+    }
 """
 # This file is part of <https://github.com/poppyschmo/terminal-coin-ticker>
 
@@ -305,8 +330,17 @@ def _hex_to_rgb(hstr):
     """
     >>> _hex_to_rgb("#fafafa")
     (250, 250, 250)
+
+    Lazy CSS variant::
+
+        >>> _hex_to_rgb("#fff")
+        (255, 255, 255)
+
     """
-    return tuple(int(c) for c in bytes.fromhex(hstr.lstrip("#")))
+    stripped = hstr.lstrip("#")
+    if len(stripped) == 3:
+        return tuple((ord(bytes.fromhex(c * 2)) for c in stripped))
+    return tuple(bytes.fromhex(stripped))
 
 
 def make_truecolor_palette(plane: str, *args, **kwargs):
@@ -323,3 +357,35 @@ def make_truecolor_palette(plane: str, *args, **kwargs):
     for field, value in dict(kwargs).items():
         kwargs[field] = template.format(*_hex_to_rgb(value))
     return maker(**kwargs)
+
+
+# Utils for adapting to APIs not used in modules
+
+def blend_hex(*args):
+    """
+    Average hex colors (uses ``round()``)
+    >>> blend_hex("#010101", "#020202", "#060606")
+    '#030303'
+    """
+    if len(args) == 1:
+        return args[0]
+    nummed = (_hex_to_rgb(a) for a in args)
+    return "#" + bytes(round(m/len(args)) for
+                       m in map(sum, zip(*nummed))).hex()
+
+
+def blend_hex_series(*args):
+    """
+    Mix in subsequent colors
+    >>> args = ("#010101", "#070707", "#0c0c0c")
+    >>> blend_hex(*args)
+    '#070707'
+    >>> blend_hex(*args[:2])
+    '#040404'
+    >>> blend_hex(blend_hex(*args[:2]), args[-1])
+    '#080808'
+    >>> blend_hex_series(*args)
+    '#080808'
+    """
+    from itertools import accumulate
+    return list(accumulate(args, blend_hex)).pop()

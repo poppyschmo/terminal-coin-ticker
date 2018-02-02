@@ -16,7 +16,7 @@ Running in alacritty_ (Gnome/Fedora 27)
   - (|three|_) |four|_
 
 .. |screenshot| image:: https://user-images.githubusercontent.com
-   /12665556/35469147-1c7457ce-02e4-11e8-88da-1cdd2dd0e9c9.gif
+   /12665556/35732616-f16a300e-07ce-11e8-8379-8bed137f1b83.gif
 .. _alacritty: https://github.com/jwilm/alacritty
 .. _24-bit terms: https://gist.github.com/XVilka/8346728
 

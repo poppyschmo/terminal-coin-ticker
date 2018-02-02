@@ -485,12 +485,12 @@ async def do_run_ticker(ranked, client, loop, manage_subs=True,
     fmt_parts = [
         "{_beg}{:%d}" % widths[0],
         "{_sym}{base}{_sepl}{sep}{_sepr}{quote:<{quote_w}}",
-        "{_prc}{last:<%dg}" % widths[2],
+        "{_prc}{last:<%df}" % widths[2],
         "{_vol}" + ("{volconv:>%d,.%df}%s" %
                     (widths[3] - pad, vprec, " " * pad) if
-                    VOL_UNIT else "{volB:<%dg}" % widths[3]),
-        "{bid:<%dg}" % widths[4],
-        "{ask:<%dg}" % widths[5],
+                    VOL_UNIT else "{volB:<%df}" % widths[3]),
+        "{bid:<%df}" % widths[4],
+        "{ask:<%df}" % widths[5],
         "{_chg}{chg:>+%d.3%%}" % widths[6],
         "{:%d}{_end}" % widths[7]
     ]
@@ -506,7 +506,7 @@ async def do_run_ticker(ranked, client, loop, manage_subs=True,
         quote = client.symbols[sym]["curQ"]
         fmt_nudge = (
             "".join(
-                (fmt_parts[n].replace("g}", ".2f}") if n in (1, 4, 5) else
+                (fmt_parts[n].replace("f}", ".2f}") if n in (1, 4, 5) else
                  fmt_parts[n] for n in range(len(fmt_parts)))
             )
             if "USD" in quote and Dec(client.ticker[sym]["last"]) >= Dec(10)
