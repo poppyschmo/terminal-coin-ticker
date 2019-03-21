@@ -2,12 +2,13 @@
 Terminal Coin Ticker
 ####################
 
+*Update 2019:* This project has been retired. PM if you want the PyPI name.
+
 Not much to this at the moment. Just a silly attempt at a basic coin ticker for
 modern terminal emulators. Pass ``--help`` for usage. Python 3.6+ and (likely)
 Linux only, for now.
 
-Running in alacritty_ (Gnome/Fedora 27)
-    |screenshot|
+|screenshot|
 
 - The plan is to have color schemes adopt exchange branding on `24-bit terms`_
 - Additional asciicasts showing current/future options coming soon:
@@ -17,7 +18,6 @@ Running in alacritty_ (Gnome/Fedora 27)
 
 .. |screenshot| image:: https://user-images.githubusercontent.com
    /12665556/35732616-f16a300e-07ce-11e8-8379-8bed137f1b83.gif
-.. _alacritty: https://github.com/jwilm/alacritty
 .. _24-bit terms: https://gist.github.com/XVilka/8346728
 
 .. |one| replace:: |cts|

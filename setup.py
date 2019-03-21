@@ -11,7 +11,7 @@ setup(
     name="terminal_coin_ticker",
     author="Jane Soko",
     author_email="boynamedjane@misled.ml",
-    version="0.0.8",
+    version="0.0.9",
     url="https://github.com/poppyschmo/terminal-coin-ticker",
     description="A cryptocurrency ticker for modern terminal emulators",
     long_description=long_description,
