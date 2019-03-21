@@ -1,5 +1,5 @@
 #!/bin/python3
-# -*- coding: UTF-8 -*-
+# -*- coding: utf-8 -*-
 """
 https://github.com/binance-exchange/binance-official-api-docs
 
@@ -160,7 +160,7 @@ class BinanceClient(ExchangeClient):
                 self.echo("No streams to consume")
                 return None
             #
-            path = "/streams"
+            path = "/stream"
             streams = "/".join(self.streams)
             query = "".join(("?streams=", *streams))
             url = "".join((self.url, path, query))

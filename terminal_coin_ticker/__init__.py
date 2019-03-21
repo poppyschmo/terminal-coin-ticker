@@ -1,5 +1,4 @@
-#!/bin/python3
-# -*- coding: UTF-8 -*-
+# -*- coding: utf-8 -*-
 
 import signal
 import sys

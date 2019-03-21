@@ -1,5 +1,4 @@
-#!/bin/python3
-# -*- coding: UTF-8 -*-
+# -*- coding: utf-8 -*-
 """
 Common client stuff goes here. Client classes need only only support those API
 calls needed by the ticker. Non-ticker-specific utils, etc. should go in the
@@ -175,7 +174,7 @@ class ExchangeClient:
         won't get called. Ugly and amateurish, for sure, but not sure
         how to do it right.
         """
-        raise NotImplemented
+        raise NotImplementedError
 
     async def do_send(self, message):
         if self.verbose > 6:
@@ -214,7 +213,7 @@ class ExchangeClient:
         This must populate a dict called ``self.symbols`` and a set
         called ``self.markets``
         """
-        raise NotImplemented
+        raise NotImplementedError
 
     async def canonicalize_pair(self, pair, as_tuple=False):
         # Unfortunately, base/quote currency ids are not always the same as the
@@ -273,7 +272,7 @@ class ExchangeClient:
         try:
             with urllib.request.urlopen(url) as f:
                 data = json.load(f)
-        except HTTPError as e:
+        except HTTPError:
             raise ConnectionError("Problem connecting; try again later")
         if "error" in data:
             raise ConnectionError(data["error"])
