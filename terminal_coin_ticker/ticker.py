@@ -313,7 +313,7 @@ async def _paint_ticker_line(client, lnum, sym, semaphore, snapshots, fmt,
                     clrs.update(dict(_sym=cfg.red, _sepl="", _sepr="",
                                      _vol="", _prc="", _chg=""))
         try:
-            with await semaphore:
+            async with semaphore:
                 print(up,
                       fmt.format("", "", base=base.lower(), sep=sep,
                                  quote=quote.lower(), **clrs, **latest,
